@@ -70,7 +70,7 @@ Future<void> main() async {
   await notifications.initialize(
     settings: InitializationSettings(android: androidInit, iOS: iosInit),
     onDidReceiveNotificationResponse: (response) {
-      notificationAction.value = response.actionId.isEmpty
+      notificationAction.value = notificationAction.value = response.actionId?.isEmpty ?? true
           ? 'OPEN_DINNER'
           : response.actionId;
     },
