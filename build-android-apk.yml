@@ -1,0 +1,76 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform scaffold
+        shell: bash
+        run: |
+          rm -rf /tmp/rp_scaffold android
+          flutter create --org com.reliablepunching --project-name reliable_friday_dinner --platforms=android /tmp/rp_scaffold
+          cp -R /tmp/rp_scaffold/android ./android
+
+      - name: Configure stable signing key
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.android"
+          cp signing/android-debug.keystore "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
+      - name: Add Android reminder permissions and receivers
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('android/app/src/main/AndroidManifest.xml')
+          s = p.read_text()
+          perms = '''\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n'''
+          s = s.replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android">', '<manifest xmlns:android="http://schemas.android.com/apk/res/android">' + perms)
+          receivers = '''\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n                <action android:name="android.intent.action.QUICKBOOT_POWERON" />\n                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>\n            </intent-filter>\n        </receiver>\n'''
+          s = s.replace('</application>', receivers + '\n    </application>')
+          p.write_text(s)
+          PY
+
+      - name: Install Android custom alarm sound
+        shell: bash
+        run: |
+          mkdir -p android/app/src/main/res/raw
+          cp assets/friday_reminder_android.wav android/app/src/main/res/raw/friday_reminder_android.wav
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Rename APK
+        shell: bash
+        run: cp build/app/outputs/flutter-apk/app-release.apk Reliable-Punching-Friday-Dinner.apk
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Reliable-Punching-Friday-Dinner-APK
+          path: Reliable-Punching-Friday-Dinner.apk
+          if-no-files-found: error
