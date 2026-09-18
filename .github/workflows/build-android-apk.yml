@@ -36,19 +36,14 @@ jobs:
             cp main.dart lib/main.dart
           fi
 
-          if [ ! -f lib/main.dart ]; then
-            echo "ERROR: lib/main.dart or root main.dart not found."
-            exit 1
-          fi
+          test -f lib/main.dart || (echo "ERROR: lib/main.dart missing" && exit 1)
+          test -f rp_app_icon.png || (echo "ERROR: rp_app_icon.png missing from repository root" && exit 1)
 
           if [ ! -f assets/friday_reminder_android.wav ] && [ -f friday_reminder_android.wav ]; then
             cp friday_reminder_android.wav assets/friday_reminder_android.wav
           fi
 
-          if [ ! -f assets/friday_reminder_android.wav ]; then
-            echo "ERROR: friday_reminder_android.wav not found."
-            exit 1
-          fi
+          test -f assets/friday_reminder_android.wav || (echo "ERROR: friday_reminder_android.wav missing" && exit 1)
 
       - name: Write clean pubspec
         shell: bash
@@ -57,7 +52,7 @@ jobs:
           name: reliable_friday_dinner
           description: Reliable Punching Friday Dinner Android app
           publish_to: "none"
-          version: 1.0.0+1
+          version: 1.0.1+2
 
           environment:
             sdk: ">=3.10.0 <4.0.0"
@@ -72,20 +67,19 @@ jobs:
             package_info_plus: ^8.3.1
             url_launcher: ^6.3.2
 
+          dev_dependencies:
+            flutter_launcher_icons: ^0.14.4
+
           flutter:
             uses-material-design: true
-          YAML
 
-      - name: Auto-fix Dart null safety
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("lib/main.dart")
-          s = p.read_text()
-          s = s.replace("response.actionId.isEmpty", "(response.actionId ?? '').isEmpty")
-          p.write_text(s)
-          PY
+          flutter_launcher_icons:
+            android: "launcher_icon"
+            image_path: "rp_app_icon.png"
+            adaptive_icon_background: "#FFFFFF"
+            adaptive_icon_foreground: "rp_app_icon.png"
+            min_sdk_android: 23
+          YAML
 
       - name: Get packages
         run: flutter pub get
@@ -98,19 +92,30 @@ jobs:
           flutter create --org com.reliablepunching --project-name reliable_friday_dinner --platforms=android /tmp/rp_scaffold
           cp -R /tmp/rp_scaffold/android ./android
 
+      - name: Set app name
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          s = p.read_text()
+          s = s.replace('android:label="reliable_friday_dinner"', 'android:label="Friday Dinner"')
+          p.write_text(s)
+          PY
+
+      - name: Generate RP launcher icon
+        run: dart run flutter_launcher_icons
+
       - name: Enable core library desugaring
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           p = Path("android/app/build.gradle.kts")
           s = p.read_text()
 
           if "isCoreLibraryDesugaringEnabled = true" not in s:
               marker = "compileOptions {"
-              if marker not in s:
-                  raise SystemExit("compileOptions block not found")
               s = s.replace(
                   marker,
                   marker + "\n        isCoreLibraryDesugaringEnabled = true",
@@ -119,7 +124,7 @@ jobs:
 
           dep = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")'
           if dep not in s:
-              s = s + "\n\ndependencies {\n    " + dep + "\n}\n"
+              s += '\n\ndependencies {\n    ' + dep + '\n}\n'
 
           p.write_text(s)
           PY
@@ -135,9 +140,16 @@ jobs:
           elif [ -f android-debug.keystore ]; then
             cp android-debug.keystore "$HOME/.android/debug.keystore"
           else
-            keytool -genkeypair -v               -keystore "$HOME/.android/debug.keystore"               -storepass android               -alias androiddebugkey               -keypass android               -keyalg RSA               -keysize 2048               -validity 10000               -dname "CN=Android Debug,O=Android,C=US"
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
-
           chmod 600 "$HOME/.android/debug.keystore"
 
       - name: Add Android notification permissions and receivers
@@ -145,17 +157,16 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           p = Path("android/app/src/main/AndroidManifest.xml")
           s = p.read_text()
 
           manifest_tag = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
-
           permissions = [
               '<uses-permission android:name="android.permission.INTERNET" />',
               '<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />',
               '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />',
               '<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />',
+              '<uses-permission android:name="android.permission.WAKE_LOCK" />',
           ]
 
           if "android.permission.POST_NOTIFICATIONS" not in s:
@@ -184,24 +195,28 @@ jobs:
       - name: Install Android custom alarm sound
         shell: bash
         run: |
-          set -e
           mkdir -p android/app/src/main/res/raw
           cp assets/friday_reminder_android.wav android/app/src/main/res/raw/friday_reminder_android.wav
 
       - name: Flutter analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: Build release APK
-        run: flutter build apk --release
+      - name: Build smaller split APKs
+        run: flutter build apk --release --split-per-abi
 
-      - name: Rename APK
+      - name: Rename APKs
         shell: bash
         run: |
-          cp build/app/outputs/flutter-apk/app-release.apk Reliable-Punching-Friday-Dinner.apk
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk Reliable-Punching-Friday-Dinner-ARM64.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk Reliable-Punching-Friday-Dinner-32BIT.apk
+          cp build/app/outputs/flutter-apk/app-x86_64-release.apk Reliable-Punching-Friday-Dinner-X86_64.apk
 
-      - name: Upload installable APK
+      - name: Upload installable APKs
         uses: actions/upload-artifact@v4
         with:
-          name: Reliable-Punching-Friday-Dinner-APK
-          path: Reliable-Punching-Friday-Dinner.apk
+          name: Reliable-Punching-Friday-Dinner-Android
+          path: |
+            Reliable-Punching-Friday-Dinner-ARM64.apk
+            Reliable-Punching-Friday-Dinner-32BIT.apk
+            Reliable-Punching-Friday-Dinner-X86_64.apk
           if-no-files-found: error
