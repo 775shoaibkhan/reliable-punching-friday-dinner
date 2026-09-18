@@ -8,12 +8,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -24,42 +25,159 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Normalize project files
+        shell: bash
+        run: |
+          set -e
+          mkdir -p lib assets
+
+          if [ ! -f lib/main.dart ] && [ -f main.dart ]; then
+            cp main.dart lib/main.dart
+          fi
+
+          if [ ! -f lib/main.dart ]; then
+            echo "ERROR: lib/main.dart or root main.dart not found."
+            exit 1
+          fi
+
+          if [ ! -f assets/friday_reminder_android.wav ] && [ -f friday_reminder_android.wav ]; then
+            cp friday_reminder_android.wav assets/friday_reminder_android.wav
+          fi
+
+          if [ ! -f assets/friday_reminder_android.wav ]; then
+            echo "ERROR: friday_reminder_android.wav not found."
+            exit 1
+          fi
+
+      - name: Write clean pubspec
+        shell: bash
+        run: |
+          cat > pubspec.yaml <<'YAML'
+          name: reliable_friday_dinner
+          description: Reliable Punching Friday Dinner Android app.
+          publish_to: 'none'
+          version: 1.0.0+1
+
+          environment:
+            sdk: '>=3.10.0 <4.0.0'
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            webview_flutter: ^4.14.1
+            flutter_local_notifications: ^22.3.0
+            timezone: ^0.11.1
+            http: ^1.5.0
+            package_info_plus: ^8.3.1
+            url_launcher: ^6.3.2
+
+          flutter:
+            uses-material-design: true
+          YAML
+
+      - name: Auto-fix known Dart null-safety issue
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('lib/main.dart')
+          s = p.read_text()
+          s = s.replace("response.actionId.isEmpty", "(response.actionId ?? '').isEmpty")
+          p.write_text(s)
+          PY
+
+      - name: Get packages
+        run: flutter pub get
+
       - name: Generate Android platform scaffold
         shell: bash
         run: |
+          set -e
           rm -rf /tmp/rp_scaffold android
           flutter create --org com.reliablepunching --project-name reliable_friday_dinner --platforms=android /tmp/rp_scaffold
           cp -R /tmp/rp_scaffold/android ./android
 
-      - name: Configure stable signing key
+      - name: Enable Android core library desugaring
         shell: bash
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('android/app/build.gradle.kts')
+          s = p.read_text()
+
+          if 'isCoreLibraryDesugaringEnabled = true' not in s:
+              marker = 'compileOptions {'
+              if marker not in s:
+                  raise SystemExit('compileOptions block not found')
+              s = s.replace(marker, marker + '\n        isCoreLibraryDesugaringEnabled = true', 1)
+
+          dep = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")'
+          if dep not in s:
+              s += '\n\ndependencies {\n    ' + dep + '\n}\n'
+
+          p.write_text(s)
+          PY
+
+      - name: Configure Android signing
+        shell: bash
+        run: |
+          set -e
           mkdir -p "$HOME/.android"
-          cp android-debug.keystore "$HOME/.android/debug.keystore"
+
+          if [ -f signing/android-debug.keystore ]; then
+            cp signing/android-debug.keystore "$HOME/.android/debug.keystore"
+          elif [ -f android-debug.keystore ]; then
+            cp android-debug.keystore "$HOME/.android/debug.keystore"
+          else
+            keytool -genkeypair -v               -keystore "$HOME/.android/debug.keystore"               -storepass android               -alias androiddebugkey               -keypass android               -keyalg RSA               -keysize 2048               -validity 10000               -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
           chmod 600 "$HOME/.android/debug.keystore"
 
-      - name: Add Android reminder permissions and receivers
+      - name: Add Android notification permissions and receivers
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('android/app/src/main/AndroidManifest.xml')
           s = p.read_text()
-          perms = '''\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n'''
-          s = s.replace('<manifest xmlns:android="http://schemas.android.com/apk/res/android">', '<manifest xmlns:android="http://schemas.android.com/apk/res/android">' + perms)
-          receivers = '''\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n                <action android:name="android.intent.action.QUICKBOOT_POWERON" />\n                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>\n            </intent-filter>\n        </receiver>\n'''
-          s = s.replace('</application>', receivers + '\n    </application>')
+
+          manifest_tag = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+          perms = '''
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+'''
+          if 'android.permission.POST_NOTIFICATIONS' not in s:
+              s = s.replace(manifest_tag, manifest_tag + perms, 1)
+
+          receivers = '''
+        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
+'''
+          if 'ScheduledNotificationReceiver' not in s:
+              s = s.replace('</application>', receivers + '\n    </application>', 1)
+
           p.write_text(s)
           PY
 
       - name: Install Android custom alarm sound
         shell: bash
         run: |
+          set -e
           mkdir -p android/app/src/main/res/raw
-          cp friday_reminder_android.wav android/app/src/main/res/raw/friday_reminder_android.wav
+          cp assets/friday_reminder_android.wav android/app/src/main/res/raw/friday_reminder_android.wav
 
-      - name: Get packages
-        run: flutter pub get
+      - name: Flutter analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Build release APK
         run: flutter build apk --release
