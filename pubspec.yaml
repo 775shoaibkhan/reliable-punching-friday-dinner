@@ -19,4 +19,5 @@ dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/friday_reminder_ios.wav
+   - friday_reminder_android.wav
+- friday_reminder_ios.wav
