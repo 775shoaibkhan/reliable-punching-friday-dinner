@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -25,73 +26,112 @@ const String categoryId = 'FRIDAY_DINNER_REMINDER';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  tzdata.initializeTimeZones();
-  tz.setLocalLocation(tz.getLocation('Asia/Karachi'));
 
-  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-  final iosInit = DarwinInitializationSettings(
-    notificationCategories: <DarwinNotificationCategory>[
-      DarwinNotificationCategory(
-        categoryId,
-        actions: <DarwinNotificationAction>[
-          DarwinNotificationAction.plain(
-            'OPEN_DINNER',
-            'Select Dish',
-            options: <DarwinNotificationActionOption>{
-              DarwinNotificationActionOption.foreground,
-            },
-          ),
-          DarwinNotificationAction.plain(
-            'SNOOZE_4',
-            '4 min',
-            options: <DarwinNotificationActionOption>{
-              DarwinNotificationActionOption.foreground,
-            },
-          ),
-          DarwinNotificationAction.plain(
-            'SNOOZE_7',
-            '7 min',
-            options: <DarwinNotificationActionOption>{
-              DarwinNotificationActionOption.foreground,
-            },
-          ),
-          DarwinNotificationAction.plain(
-            'SNOOZE_10',
-            '10 min',
-            options: <DarwinNotificationActionOption>{
-              DarwinNotificationActionOption.foreground,
-            },
-          ),
-        ],
-      ),
-    ],
-  );
+  // UI ko foran start karo. Alarm/notification setup ki kisi phone-specific
+  // problem ki wajah se app launch block/crash nahi hogi.
+  runApp(const FridayDinnerApp());
 
-  await notifications.initialize(
-    settings: InitializationSettings(android: androidInit, iOS: iosInit),
-    onDidReceiveNotificationResponse: (response) {
-      final actionId = response.actionId ?? '';
-      notificationAction.value = actionId.isEmpty
-          ? 'OPEN_DINNER'
-          : actionId;
-    },
-  );
+  unawaited(_initializeMobileServices());
+}
 
-  if (Platform.isAndroid) {
-    final android = notifications
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
-    await android?.requestNotificationsPermission();
-    await android?.requestExactAlarmsPermission();
-  } else if (Platform.isIOS) {
-    final ios = notifications
-        .resolvePlatformSpecificImplementation<
-            IOSFlutterLocalNotificationsPlugin>();
-    await ios?.requestPermissions(alert: true, badge: true, sound: true);
+Future<void> _initializeMobileServices() async {
+  try {
+    tzdata.initializeTimeZones();
+    tz.setLocalLocation(tz.getLocation('Asia/Karachi'));
+  } catch (error) {
+    debugPrint('Timezone setup failed: $error');
+    return;
   }
 
-  await FridayReminderScheduler.scheduleUpcomingFriday();
-  runApp(const FridayDinnerApp());
+  try {
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+
+    final iosInit = DarwinInitializationSettings(
+      notificationCategories: <DarwinNotificationCategory>[
+        DarwinNotificationCategory(
+          categoryId,
+          actions: <DarwinNotificationAction>[
+            DarwinNotificationAction.plain(
+              'OPEN_DINNER',
+              'Select Dish',
+              options: <DarwinNotificationActionOption>{
+                DarwinNotificationActionOption.foreground,
+              },
+            ),
+            DarwinNotificationAction.plain(
+              'SNOOZE_4',
+              '4 min',
+              options: <DarwinNotificationActionOption>{
+                DarwinNotificationActionOption.foreground,
+              },
+            ),
+            DarwinNotificationAction.plain(
+              'SNOOZE_7',
+              '7 min',
+              options: <DarwinNotificationActionOption>{
+                DarwinNotificationActionOption.foreground,
+              },
+            ),
+            DarwinNotificationAction.plain(
+              'SNOOZE_10',
+              '10 min',
+              options: <DarwinNotificationActionOption>{
+                DarwinNotificationActionOption.foreground,
+              },
+            ),
+          ],
+        ),
+      ],
+    );
+
+    await notifications.initialize(
+      settings: InitializationSettings(android: androidInit, iOS: iosInit),
+      onDidReceiveNotificationResponse: (response) {
+        final actionId = response.actionId ?? '';
+        notificationAction.value =
+            actionId.isEmpty ? 'OPEN_DINNER' : actionId;
+      },
+    );
+  } catch (error) {
+    debugPrint('Notification initialization failed: $error');
+    // App ordering screen ko phir bhi chalne do.
+    return;
+  }
+
+  if (Platform.isAndroid) {
+    try {
+      final android = notifications
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      await android?.requestNotificationsPermission();
+    } catch (error) {
+      debugPrint('Notification permission request failed: $error');
+    }
+
+    try {
+      final android = notifications
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      await android?.requestExactAlarmsPermission();
+    } catch (error) {
+      debugPrint('Exact alarm permission request failed: $error');
+    }
+  } else if (Platform.isIOS) {
+    try {
+      final ios = notifications
+          .resolvePlatformSpecificImplementation<
+              IOSFlutterLocalNotificationsPlugin>();
+      await ios?.requestPermissions(alert: true, badge: true, sound: true);
+    } catch (error) {
+      debugPrint('iOS notification permission request failed: $error');
+    }
+  }
+
+  try {
+    await FridayReminderScheduler.scheduleUpcomingFriday();
+  } catch (error) {
+    debugPrint('Friday reminder scheduling failed: $error');
+  }
 }
 
 class FridayDinnerApp extends StatelessWidget {
@@ -161,6 +201,9 @@ class _FridayDinnerHomeState extends State<FridayDinnerHome> {
         NavigationDelegate(
           onProgress: (progress) {
             if (mounted) setState(() => _progress = progress / 100);
+          },
+          onWebResourceError: (error) {
+            debugPrint('WebView error: ${error.description}');
           },
         ),
       )
