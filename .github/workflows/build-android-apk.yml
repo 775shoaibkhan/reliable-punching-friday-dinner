@@ -3,7 +3,8 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   build:
@@ -17,7 +18,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -54,12 +55,12 @@ jobs:
         run: |
           cat > pubspec.yaml <<'YAML'
           name: reliable_friday_dinner
-          description: Reliable Punching Friday Dinner Android app.
-          publish_to: 'none'
+          description: Reliable Punching Friday Dinner Android app
+          publish_to: "none"
           version: 1.0.0+1
 
           environment:
-            sdk: '>=3.10.0 <4.0.0'
+            sdk: ">=3.10.0 <4.0.0"
 
           dependencies:
             flutter:
@@ -75,12 +76,12 @@ jobs:
             uses-material-design: true
           YAML
 
-      - name: Auto-fix known Dart null-safety issue
+      - name: Auto-fix Dart null safety
         shell: bash
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          p = Path('lib/main.dart')
+          p = Path("lib/main.dart")
           s = p.read_text()
           s = s.replace("response.actionId.isEmpty", "(response.actionId ?? '').isEmpty")
           p.write_text(s)
@@ -97,23 +98,28 @@ jobs:
           flutter create --org com.reliablepunching --project-name reliable_friday_dinner --platforms=android /tmp/rp_scaffold
           cp -R /tmp/rp_scaffold/android ./android
 
-      - name: Enable Android core library desugaring
+      - name: Enable core library desugaring
         shell: bash
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          p = Path('android/app/build.gradle.kts')
+
+          p = Path("android/app/build.gradle.kts")
           s = p.read_text()
 
-          if 'isCoreLibraryDesugaringEnabled = true' not in s:
-              marker = 'compileOptions {'
+          if "isCoreLibraryDesugaringEnabled = true" not in s:
+              marker = "compileOptions {"
               if marker not in s:
-                  raise SystemExit('compileOptions block not found')
-              s = s.replace(marker, marker + '\n        isCoreLibraryDesugaringEnabled = true', 1)
+                  raise SystemExit("compileOptions block not found")
+              s = s.replace(
+                  marker,
+                  marker + "\n        isCoreLibraryDesugaringEnabled = true",
+                  1
+              )
 
           dep = 'coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")'
           if dep not in s:
-              s += '\n\ndependencies {\n    ' + dep + '\n}\n'
+              s = s + "\n\ndependencies {\n    " + dep + "\n}\n"
 
           p.write_text(s)
           PY
@@ -137,34 +143,40 @@ jobs:
       - name: Add Android notification permissions and receivers
         shell: bash
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          p = Path('android/app/src/main/AndroidManifest.xml')
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
           s = p.read_text()
 
           manifest_tag = '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
-          perms = '''
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-'''
-          if 'android.permission.POST_NOTIFICATIONS' not in s:
-              s = s.replace(manifest_tag, manifest_tag + perms, 1)
 
-          receivers = '''
-        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
-        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED"/>
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
-                <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
-                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
-            </intent-filter>
-        </receiver>
-'''
-          if 'ScheduledNotificationReceiver' not in s:
-              s = s.replace('</application>', receivers + '\n    </application>', 1)
+          permissions = [
+              '<uses-permission android:name="android.permission.INTERNET" />',
+              '<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />',
+              '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />',
+              '<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />',
+          ]
+
+          if "android.permission.POST_NOTIFICATIONS" not in s:
+              block = "\n".join("    " + x for x in permissions)
+              s = s.replace(manifest_tag, manifest_tag + "\n" + block, 1)
+
+          receiver_lines = [
+              '        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />',
+              '        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">',
+              '            <intent-filter>',
+              '                <action android:name="android.intent.action.BOOT_COMPLETED" />',
+              '                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />',
+              '                <action android:name="android.intent.action.QUICKBOOT_POWERON" />',
+              '                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />',
+              '            </intent-filter>',
+              '        </receiver>',
+          ]
+
+          if "ScheduledNotificationReceiver" not in s:
+              receivers = "\n".join(receiver_lines)
+              s = s.replace("</application>", receivers + "\n    </application>", 1)
 
           p.write_text(s)
           PY
@@ -184,7 +196,8 @@ jobs:
 
       - name: Rename APK
         shell: bash
-        run: cp build/app/outputs/flutter-apk/app-release.apk Reliable-Punching-Friday-Dinner.apk
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk Reliable-Punching-Friday-Dinner.apk
 
       - name: Upload installable APK
         uses: actions/upload-artifact@v4
